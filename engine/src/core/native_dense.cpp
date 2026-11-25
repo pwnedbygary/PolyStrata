@@ -682,6 +682,19 @@ bool NativeDense::gguf_carries_q8_hc(const std::vector<std::string>& shards) {
 
 bool NativeDense::apply_hc_q8_default(const std::vector<std::string>& shards) {
     if (std::getenv("STRATA_HC_Q8") != nullptr || !gguf_carries_q8_hc(shards)) return false;
+    // sm_86 (Ampere consumer): the sm_86 defaults keep STRATA_HC_Q8 opt-in (nv_defaults.cpp), and the Q8_0 HC verify
+    // read fails there at the first warm-up window with "verify: layer 0 never rang (operation not supported on
+    // global/shared address space)" (RTX 3080, driver 620.73.04, CUDA 13.5, engine 0.1.66; STRATA_HC_Q8=0 passes every
+    // window). Leave those cards on the bf16 read unless the runner asks for Q8_0 explicitly above.
+    {
+        int dev = 0, major = 0, minor = 0;
+        const bool sm86 = cudaGetDevice(&dev) == cudaSuccess &&
+                          cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev) == cudaSuccess &&
+                          cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev) == cudaSuccess &&
+                          major == 8 && minor == 6;
+        (void) cudaGetLastError();
+        if (sm86) return false;
+    }
 #if defined(_WIN32)
     _putenv_s("STRATA_HC_Q8", "1");
 #else
